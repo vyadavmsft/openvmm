@@ -64,6 +64,32 @@ pub struct LoadUefiParams<'a> {
     pub acpi_tables: &'a [&'a [u8]],
 }
 
+fn add_acpi_table(cfg: &mut config::Blob, table: &[u8]) {
+    cfg.add_raw(acpi_table_structure_type(table), table);
+}
+
+#[cfg(guest_arch = "x86_64")]
+#[allow(deprecated)]
+fn acpi_table_structure_type(table: &[u8]) -> config::BlobStructureType {
+    match table.get(..4) {
+        // The x86 firmware still consumes these legacy typed ACPI blob IDs
+        // directly during early boot. Keep newer/unknown tables on the generic
+        // AcpiTable path.
+        Some(b"APIC") => config::BlobStructureType::Madt,
+        Some(b"MCFG") => config::BlobStructureType::Mcfg,
+        Some(b"PPTT") => config::BlobStructureType::Pptt,
+        Some(b"SLIT") => config::BlobStructureType::Slit,
+        Some(b"SSDT") => config::BlobStructureType::Ssdt,
+        Some(b"SRAT") => config::BlobStructureType::Srat,
+        _ => config::BlobStructureType::AcpiTable,
+    }
+}
+
+#[cfg(not(guest_arch = "x86_64"))]
+fn acpi_table_structure_type(_table: &[u8]) -> config::BlobStructureType {
+    config::BlobStructureType::AcpiTable
+}
+
 /// Loads the UEFI firmware.
 pub fn load_uefi(params: &LoadUefiParams<'_>) -> Result<Vec<Register>, Error> {
     let LoadUefiParams {
@@ -184,13 +210,13 @@ pub fn load_uefi(params: &LoadUefiParams<'_>) -> Result<Vec<Register>, Error> {
     }
 
     for table in acpi_tables {
-        cfg.add_raw(config::BlobStructureType::AcpiTable, table);
+        add_acpi_table(&mut cfg, table);
     }
 
     if !pcie_host_bridges.is_empty() {
         let pcie_tables = vmm_core::acpi_builder::build_pcie_acpi_tables(pcie_host_bridges)
             .map_err(Error::PcieAcpi)?;
-        cfg.add_raw(config::BlobStructureType::AcpiTable, &pcie_tables.ssdt);
+        add_acpi_table(&mut cfg, &pcie_tables.ssdt);
         if let Some(cedt) = pcie_tables.cedt {
             cfg.add_raw(config::BlobStructureType::AcpiTable, &cedt);
         }
@@ -226,4 +252,46 @@ pub fn load_uefi(params: &LoadUefiParams<'_>) -> Result<Vec<Register>, Error> {
     .map_err(Error::Loader)?;
 
     Ok(loader.initial_regs())
+}
+
+#[cfg(all(test, guest_arch = "x86_64"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[allow(deprecated)]
+    fn classify_x86_firmware_consumed_acpi_tables() {
+        assert_eq!(
+            acpi_table_structure_type(b"MCFGtest") as u32,
+            config::BlobStructureType::Mcfg as u32
+        );
+        assert_eq!(
+            acpi_table_structure_type(b"SSDTtest") as u32,
+            config::BlobStructureType::Ssdt as u32
+        );
+        assert_eq!(
+            acpi_table_structure_type(b"APICtest") as u32,
+            config::BlobStructureType::Madt as u32
+        );
+        assert_eq!(
+            acpi_table_structure_type(b"SRATtest") as u32,
+            config::BlobStructureType::Srat as u32
+        );
+        assert_eq!(
+            acpi_table_structure_type(b"SLITtest") as u32,
+            config::BlobStructureType::Slit as u32
+        );
+        assert_eq!(
+            acpi_table_structure_type(b"PPTTtest") as u32,
+            config::BlobStructureType::Pptt as u32
+        );
+        assert_eq!(
+            acpi_table_structure_type(b"IORTtest") as u32,
+            config::BlobStructureType::AcpiTable as u32
+        );
+        assert_eq!(
+            acpi_table_structure_type(b"") as u32,
+            config::BlobStructureType::AcpiTable as u32
+        );
+    }
 }
