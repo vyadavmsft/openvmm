@@ -72,11 +72,15 @@ fn add_acpi_table(cfg: &mut config::Blob, table: &[u8]) {
 #[allow(deprecated)]
 fn acpi_table_structure_type(table: &[u8]) -> config::BlobStructureType {
     match table.get(..4) {
-        // The x86 firmware uses the typed MCFG blob to learn the ECAM base for
-        // its own PCI enumeration. Keep using generic AcpiTable for other ACPI
-        // tables unless the firmware consumes a legacy blob ID directly.
+        // The x86 firmware still consumes these legacy typed ACPI blob IDs
+        // directly during early boot. Keep newer/unknown tables on the generic
+        // AcpiTable path.
+        Some(b"APIC") => config::BlobStructureType::Madt,
         Some(b"MCFG") => config::BlobStructureType::Mcfg,
+        Some(b"PPTT") => config::BlobStructureType::Pptt,
+        Some(b"SLIT") => config::BlobStructureType::Slit,
         Some(b"SSDT") => config::BlobStructureType::Ssdt,
+        Some(b"SRAT") => config::BlobStructureType::Srat,
         _ => config::BlobStructureType::AcpiTable,
     }
 }
@@ -267,7 +271,19 @@ mod tests {
         );
         assert_eq!(
             acpi_table_structure_type(b"APICtest") as u32,
-            config::BlobStructureType::AcpiTable as u32
+            config::BlobStructureType::Madt as u32
+        );
+        assert_eq!(
+            acpi_table_structure_type(b"SRATtest") as u32,
+            config::BlobStructureType::Srat as u32
+        );
+        assert_eq!(
+            acpi_table_structure_type(b"SLITtest") as u32,
+            config::BlobStructureType::Slit as u32
+        );
+        assert_eq!(
+            acpi_table_structure_type(b"PPTTtest") as u32,
+            config::BlobStructureType::Pptt as u32
         );
         assert_eq!(
             acpi_table_structure_type(b"") as u32,
